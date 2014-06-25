@@ -6,9 +6,12 @@ Node to interact with screen messages to activate
 or deactivate joints to do learning by demonstration
 '''
 import rospy
+from learn_from_robot.msg import JointActivation
+from dynamic_reconfigure import client, DynamicReconfigureParameterException
 
 ACTIVATION_TOPIC = '/active_joints'
-from learn_from_robot.msg import JointActivation
+#TODO: Define this topic for real and it's interface
+JOINTS_DYN_REC = '/joints_dyn_rec'
 
 ACTIVATED = 1.0
 DEACTIVATED = 0.01
@@ -17,6 +20,9 @@ class activation_manager():
     def __init__(self):
         rospy.loginfo("Subscribing to '" + ACTIVATION_TOPIC + "'")
         self.activation_subs = rospy.Subscriber(ACTIVATION_TOPIC, JointActivation, self.activation_cb)
+        
+        rospy.loginfo("Trying to connect a service client to '" + JOINTS_DYN_REC + "' dynamic reconfigure...")
+        self.client = client.Client(JOINTS_DYN_REC)
         
         self.head = ['head_1_joint', 'head_2_joint'] # Does not work :( motors are different
         self.torso = ['torso_1_joint', 'torso_2_joint']
@@ -30,8 +36,7 @@ class activation_manager():
         self.right_hand = ['hand_right_index_joint', 'hand_right_middle_joint', 'hand_right_thumb_joint'] # Only the actuated
         
         self.group_names = ['head', 'torso', 'left_arm', 'right_arm', 'left_hand', 'right_hand']
-        
-        self.dyn_reconfig_thingy = None
+
         
     def activation_cb(self, data):
         # Check if we got a group or a single joint to activate/deactivate
@@ -41,13 +46,20 @@ class activation_manager():
         else:
             list_of_joints = [joints]
         
+        # Set the mode of the joint
         for joint in list_of_joints:
             if data.active.data: # If True, activate
                 rospy.loginfo("Setting joint '" + joint + "' to ACTIVE")
-                # Do dynamic reconfigure thing here with value ACTIVATED
+                try:
+                    config = self.client.update_configuration({joint : ACTIVATED})
+                except DynamicReconfigureParameterException:
+                    rospy.logwarn("Couldn't set '" + joint + "' to ACTIVATED")
             else:
                 rospy.loginfo("Setting joint '" + joint + "' to DEACTIVATED")
-                # Do dynamic reconfigure thing here with value DEACTIVATED
+                try:
+                    config = self.client.update_configuration({joint : DEACTIVATED})
+                except DynamicReconfigureParameterException:
+                    rospy.logwarn("Couldn't set '" + joint + "' to DEACTIVATED")
         
         
 if __name__ == '__main__':
