@@ -7,11 +7,10 @@ or deactivate joints to do learning by demonstration
 '''
 import rospy
 from learn_from_robot.msg import JointActivation
-from dynamic_reconfigure import client, DynamicReconfigureParameterException
+from pal_control_msgs.srv import CurrentLimit, CurrentLimitRequest
 
 ACTIVATION_TOPIC = '/active_joints'
-#TODO: Define this topic for real and it's interface
-JOINTS_DYN_REC = '/joints_dyn_rec'
+CURRENT_LIMIT_SRV = '/current_limit_controller/set_current_limit'
 
 ACTIVATED = 1.0
 DEACTIVATED = 0.01
@@ -21,8 +20,9 @@ class activation_manager():
         rospy.loginfo("Subscribing to '" + ACTIVATION_TOPIC + "'")
         self.activation_subs = rospy.Subscriber(ACTIVATION_TOPIC, JointActivation, self.activation_cb)
         
-        rospy.loginfo("Trying to connect a service client to '" + JOINTS_DYN_REC + "' dynamic reconfigure...")
-        self.client = client.Client(JOINTS_DYN_REC)
+        rospy.loginfo("Trying to connect to service'" + CURRENT_LIMIT_SRV + "'...")
+        self.current_limit_srv = rospy.ServiceProxy(CURRENT_LIMIT_SRV, CurrentLimit)
+        self.current_limit_srv.wait_for_service()
         
         self.head = ['head_1_joint', 'head_2_joint'] # Does not work :( motors are different
         self.torso = ['torso_1_joint', 'torso_2_joint']
@@ -36,6 +36,7 @@ class activation_manager():
         self.right_hand = ['hand_right_index_joint', 'hand_right_middle_joint', 'hand_right_thumb_joint'] # Only the actuated
         
         self.group_names = ['head', 'torso', 'left_arm', 'right_arm', 'left_hand', 'right_hand']
+        rospy.loginfo("Finished initialization.")
 
         
     def activation_cb(self, data):
@@ -48,18 +49,16 @@ class activation_manager():
         
         # Set the mode of the joint
         for joint in list_of_joints:
+            req = CurrentLimitRequest()
+            req.actuator_name = joint.replace('joint', 'motor')
             if data.active.data: # If True, activate
                 rospy.loginfo("Setting joint '" + joint + "' to ACTIVE")
-                try:
-                    config = self.client.update_configuration({joint : ACTIVATED})
-                except DynamicReconfigureParameterException:
-                    rospy.logwarn("Couldn't set '" + joint + "' to ACTIVATED")
+                req.current_limit = ACTIVATED
             else:
                 rospy.loginfo("Setting joint '" + joint + "' to DEACTIVATED")
-                try:
-                    config = self.client.update_configuration({joint : DEACTIVATED})
-                except DynamicReconfigureParameterException:
-                    rospy.logwarn("Couldn't set '" + joint + "' to DEACTIVATED")
+                req.current_limit = DEACTIVATED
+            self.current_limit_srv.call(req)
+
         
         
 if __name__ == '__main__':
