@@ -13,7 +13,10 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 import copy
 
 JOINT_STATES_TOPIC = '/joint_states'
+JOINT_ERROR_STATES_TOPIC = '/joint_error_states'
 EXECUTE_KNOWN_TRAJ_SRV = '/execute_kinematic_path'
+
+MAX_JOINT_ERROR = 0.01
 
 def createRobotTrajectoryFromJointStates(joint_states, interesting_joint_list):
     """Given a joint_states message and the joints we are interested in moving create
@@ -51,6 +54,12 @@ class PositionKeeper():
         self.current_joint_states = None
         while self.current_joint_states == None:
             rospy.sleep(0.2)
+            
+        rospy.loginfo("Subscribing to joint_error_states")
+        self.joints_error_sub = rospy.Subscriber(JOINT_ERROR_STATES_TOPIC, JointState, self.joint_error_state_cb) 
+        self.current_joint_error_states = None
+        while self.current_joint_error_states == None:
+            rospy.sleep(0.2)
         
         rospy.loginfo("Connecting to MoveIt! known trajectory executor server '" + EXECUTE_KNOWN_TRAJ_SRV + "'...")
         self.execute_known_traj_service = rospy.ServiceProxy(EXECUTE_KNOWN_TRAJ_SRV, ExecuteKnownTrajectory)
@@ -68,19 +77,38 @@ class PositionKeeper():
         self.right_hand = ['hand_right_index_joint', 'hand_right_middle_joint', 'hand_right_thumb_joint']
 
         self.all_joints = self.torso + self.head + self.left_arm + self.right_arm + self.left_hand + self.right_hand
+        
+        rospy.loginfo("Finished initialization!")
 
     def joint_state_cb(self, data):
         self.current_joint_states = data
         
+    def joint_error_state_cb(self, data):
+        self.current_joint_error_states = data
+        
+    def get_joints_that_need_new_goal(self):
+        """Read the error of the joints and give back the name
+        of the joints that have enough errors to need relocation"""
+        joints_to_move = []
+        for joint, error in zip(self.current_joint_error_states.name, self.current_joint_error_states.position):
+            if abs(error) > MAX_JOINT_ERROR:
+                joints_to_move.append(joint)
+        return joints_to_move
+
+
     def run(self):
-        r = rospy.Rate(10)
+        r = rospy.Rate(20)
         while not rospy.is_shutdown():
-            # Create a robot trajectory with the current joint state and the actuated joints
-            rt = createRobotTrajectoryFromJointStates(self.current_joint_states, self.all_joints)
-            rospy.loginfo("robot traj is: \n" + str(rt))
-            # Create a goal for the execute_known_trajectory service which will take care of groups and joints
-            ektr = createExecuteKnownTrajectoryRequest(rt)
-            self.execute_known_traj_service.call(ektr)
+            # Check if there is error in the current joint states enough to need to send new goal position
+            new_goal_joints = self.get_joints_that_need_new_goal()
+            if len(new_goal_joints) > 0: # If there is any joint to update...
+                rospy.loginfo("Sending new pose because of joints: " + str(new_goal_joints))
+                # Create a robot trajectory with the current joint state and the actuated joints
+                rt = createRobotTrajectoryFromJointStates(self.current_joint_states, self.all_joints)
+                #rospy.loginfo("robot traj is: \n" + str(rt))
+                # Create a goal for the execute_known_trajectory service which will take care of groups and joints
+                ektr = createExecuteKnownTrajectoryRequest(rt)
+                self.execute_known_traj_service.call(ektr)
             r.sleep()
             
 

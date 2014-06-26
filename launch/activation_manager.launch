@@ -1,4 +1,9 @@
 <launch>
   <!-- Launch activation manager -->
   <node name="activation_manager" pkg="learn_from_robot" type="activation_manager.py"/>
+  <!-- launch joint_error_states publisher -->
+  <node name="joint_error_states" pkg="learn_from_robot" type="joint_error_states.py"/>
+  <!-- launch actual pose sender -->
+  <node name="actual_pose_sender" pkg="learn_from_robot" type="actual_pose_sender.py"/>
+  
 </launch>
