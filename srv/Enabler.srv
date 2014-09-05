@@ -1,0 +1,8 @@
+# Boolean to enable or disable the service
+bool enable
+
+---
+
+# The status of the service after the call and an error string if there was some error
+bool enabled_status
+string error

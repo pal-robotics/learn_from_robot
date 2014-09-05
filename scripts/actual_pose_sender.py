@@ -9,14 +9,18 @@ from sensor_msgs.msg import JointState
 from moveit_msgs.srv import ExecuteKnownTrajectory, ExecuteKnownTrajectoryRequest, ExecuteKnownTrajectoryResponse
 from moveit_msgs.msg import RobotTrajectory
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from learn_from_robot.srv import Enabler, EnablerRequest, EnablerResponse
 
 import copy
+from cgitb import enable
+from learn_from_robot.srv._Enabler import Enabler
 
 JOINT_STATES_TOPIC = '/joint_states'
 JOINT_ERROR_STATES_TOPIC = '/joint_error_states'
 EXECUTE_KNOWN_TRAJ_SRV = '/execute_kinematic_path'
+SENDER_ENABLE_SRV = '/activation_manager_pose_sender'
 
-MAX_JOINT_ERROR = 0.01
+MAX_JOINT_ERROR = 0.05
 
 def createRobotTrajectoryFromJointStates(joint_states, interesting_joint_list):
     """Given a joint_states message and the joints we are interested in moving create
@@ -49,21 +53,13 @@ def createExecuteKnownTrajectoryRequest(trajectory, wait_for_execution=True):
 
 class PositionKeeper():
     def __init__(self):
-        rospy.loginfo("Subscribing to joint_states")
-        self.joints_sub = rospy.Subscriber(JOINT_STATES_TOPIC, JointState, self.joint_state_cb) 
+        self.joints_sub = None #rospy.Subscriber(JOINT_STATES_TOPIC, JointState, self.joint_state_cb) 
         self.current_joint_states = None
-        while self.current_joint_states == None:
-            rospy.sleep(0.2)
-            
-        rospy.loginfo("Subscribing to joint_error_states")
-        self.joints_error_sub = rospy.Subscriber(JOINT_ERROR_STATES_TOPIC, JointState, self.joint_error_state_cb) 
+
+        self.joints_error_sub = None #rospy.Subscriber(JOINT_ERROR_STATES_TOPIC, JointState, self.joint_error_state_cb) 
         self.current_joint_error_states = None
-        while self.current_joint_error_states == None:
-            rospy.sleep(0.2)
-        
-        rospy.loginfo("Connecting to MoveIt! known trajectory executor server '" + EXECUTE_KNOWN_TRAJ_SRV + "'...")
-        self.execute_known_traj_service = rospy.ServiceProxy(EXECUTE_KNOWN_TRAJ_SRV, ExecuteKnownTrajectory)
-        self.execute_known_traj_service.wait_for_service()
+
+        self.execute_known_traj_service = None #rospy.ServiceProxy(EXECUTE_KNOWN_TRAJ_SRV, ExecuteKnownTrajectory)
 
         self.head       = ['head_1_joint', 'head_2_joint']
         self.torso      = ['torso_1_joint', 'torso_2_joint']
@@ -78,7 +74,48 @@ class PositionKeeper():
 
         self.all_joints = self.torso + self.head + self.left_arm + self.right_arm + self.left_hand + self.right_hand
         
+        self.service_enabled = False
+        
+        rospy.Service(SENDER_ENABLE_SRV, Enabler, self.enabler_cb)
+        # Here we fake a servicecall to activate so we only have one point of un/subscribing to topics
+        self.enabler_cb(EnablerRequest(True))
         rospy.loginfo("Finished initialization!")
+
+    def enabler_cb(self, data):
+        """Callback for enabling and disabling the sender calls and in general the node"""
+        resp = EnablerResponse()
+        if data.enable == self.service_enabled: # Give "error" if nothing is done
+            resp.error = "We are already in this state: " + str(self.service_enabled)
+        else: # Do stuff
+            if data.enable == False:
+                # Unsubscribe stuff
+                self.joints_sub.unregister()
+                self.joints_error_sub.unregister()
+                self.execute_known_traj_service.close()
+                self.service_enabled = False
+
+            elif data.enable == True:
+                # Resubscribe stuff
+                rospy.loginfo("Subscribing to joint_states")
+                self.joints_sub = rospy.Subscriber(JOINT_STATES_TOPIC, JointState, self.joint_state_cb)
+                while self.current_joint_states == None:
+                    rospy.sleep(0.2)
+
+                rospy.loginfo("Subscribing to joint_error_states")
+                self.joints_error_sub = rospy.Subscriber(JOINT_ERROR_STATES_TOPIC, JointState, self.joint_error_state_cb)
+                while self.current_joint_error_states == None:
+                    rospy.sleep(0.2)
+
+                rospy.loginfo("Connecting to MoveIt! known trajectory executor server '" + EXECUTE_KNOWN_TRAJ_SRV + "'...")
+                self.execute_known_traj_service = rospy.ServiceProxy(EXECUTE_KNOWN_TRAJ_SRV, ExecuteKnownTrajectory)
+                self.execute_known_traj_service.wait_for_service()
+                
+                self.service_enabled = True
+            else:
+                rospy.logerr("This should never happen, enable is not True nor False")
+        resp.enabled_status = self.service_enabled
+        return resp
+
 
     def joint_state_cb(self, data):
         self.current_joint_states = data
@@ -95,11 +132,21 @@ class PositionKeeper():
                 joints_to_move.append(joint)
         return joints_to_move
 
+    def decide_group_by_joints_to_move(self, joints_to_move):
+        """Given a list of joints to move return the group that contains these joints"""
+        # TODO: implement logic to parse joints and try to use the tiniest group  that contains the joints
+        group_to_move = self.all_joints
+        
+        return group_to_move
+
 
     def run(self):
         r = rospy.Rate(20)
         while not rospy.is_shutdown():
             # Check if there is error in the current joint states enough to need to send new goal position
+            if not self.service_enabled:
+                r.sleep()
+                continue
             new_goal_joints = self.get_joints_that_need_new_goal()
             if len(new_goal_joints) > 0: # If there is any joint to update...
                 rospy.loginfo("Sending new pose because of joints: " + str(new_goal_joints))
