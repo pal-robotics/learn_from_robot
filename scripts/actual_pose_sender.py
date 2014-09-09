@@ -8,6 +8,7 @@ import rospy
 from sensor_msgs.msg import JointState
 from moveit_msgs.srv import ExecuteKnownTrajectory, ExecuteKnownTrajectoryRequest, ExecuteKnownTrajectoryResponse
 from moveit_msgs.msg import RobotTrajectory
+from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from learn_from_robot.srv import Enabler, EnablerRequest, EnablerResponse
 
@@ -74,6 +75,9 @@ class PositionKeeper():
 
         self.all_joints = self.torso + self.head + self.left_arm + self.right_arm + self.left_hand + self.right_hand
         
+        self.default_joints = self.right_arm
+        self.ignore_list = self.right_hand + self.left_hand + self.torso + self.head + self.left_arm
+        
         self.service_enabled = False
         
         rospy.Service(SENDER_ENABLE_SRV, Enabler, self.enabler_cb)
@@ -128,7 +132,7 @@ class PositionKeeper():
         of the joints that have enough errors to need relocation"""
         joints_to_move = []
         for joint, error in zip(self.current_joint_error_states.name, self.current_joint_error_states.position):
-            if abs(error) > MAX_JOINT_ERROR:
+            if abs(error) > MAX_JOINT_ERROR and (joint not in self.ignore_list):
                 joints_to_move.append(joint)
         return joints_to_move
 
@@ -139,6 +143,17 @@ class PositionKeeper():
         
         return group_to_move
 
+    def get_joint_states_of_only_wanted_joints(self, curr_joint_states, interesting_joints):
+        """Given a JointState message, with current joints, and the joints we are interested,
+        return a JointState message with only the interesting joints"""
+        js = JointState()
+        for i_j_name in interesting_joints:
+            for j_name, j_value in zip(curr_joint_states.name, curr_joint_states.position):
+                if i_j_name == j_name:
+                    js.name.append(i_j_name)
+                    js.position.append(j_value)
+        rospy.loginfo("JS to send will be: " + str(js))
+        return js
 
     def run(self):
         r = rospy.Rate(20)
@@ -151,7 +166,8 @@ class PositionKeeper():
             if len(new_goal_joints) > 0: # If there is any joint to update...
                 rospy.loginfo("Sending new pose because of joints: " + str(new_goal_joints))
                 # Create a robot trajectory with the current joint state and the actuated joints
-                rt = createRobotTrajectoryFromJointStates(self.current_joint_states, self.all_joints)
+                to_move_jointstates = self.get_joint_states_of_only_wanted_joints(self.current_joint_states, self.default_joints)
+                rt = createRobotTrajectoryFromJointStates(to_move_jointstates, self.default_joints)
                 #rospy.loginfo("robot traj is: \n" + str(rt))
                 # Create a goal for the execute_known_trajectory service which will take care of groups and joints
                 ektr = createExecuteKnownTrajectoryRequest(rt)
